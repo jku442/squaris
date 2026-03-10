@@ -115,7 +115,7 @@
         </div>
     </div>
 
-    <canvas id="drag-proxy" width="160" height="160"></canvas>
+    <canvas id="drag-proxy"></canvas>
 
     <script>
         const ROWS = 9, COLS = 9;
@@ -124,15 +124,15 @@
         const dCanvas = document.getElementById('drag-proxy'), dCtx = dCanvas.getContext('2d');
         const dBtn = document.getElementById('discardBtn');
 
-        // Responsive Calculation
         let screenWidth = window.innerWidth;
         let padding = 20;
-        let canvasWidth = screenWidth - padding;
-        if (canvasWidth > 400) canvasWidth = 400; // Cap for desktop
+        let canvasWidth = Math.min(screenWidth - padding, 400);
 
         const SIZE = canvasWidth / COLS;
         gCanvas.width = canvasWidth;
         gCanvas.height = canvasWidth;
+        dCanvas.width = SIZE * 4;
+        dCanvas.height = SIZE * 4;
 
         let grid = Array(ROWS).fill().map(() => Array(COLS).fill(0));
         let currentPiece = null;
@@ -195,39 +195,11 @@
             if (!isDragging && currentPiece) drawShape(nCtx, currentPiece.shape, currentPiece.color, 10, 10, 20);
         }
 
-        function hasAnyMove(shape) {
-            for (let r = 0; r <= ROWS - shape.length; r++) {
-                for (let c = 0; c <= COLS - shape[0].length; c++) {
-                    let fit = true;
-                    for (let y = 0; y < shape.length; y++) {
-                        for (let x = 0; x < shape[y].length; x++) {
-                            if (shape[y][x] && (grid[r + y] === undefined || grid[r + y][c + x] !== 0)) fit = false;
-                        }
-                    }
-                    if (fit) return true;
-                }
-            }
-            return false;
-        }
-
         function spawnPiece() {
             let idx;
             do {idx = Math.floor(Math.random() * SHAPES.length);} while (idx === lastDiscardedIndex);
             const p = SHAPES[idx];
-            let piece = {id: p.id, shape: p.s, color: p.c};
-
-            let ts = piece.shape;
-            let anyFit = false;
-            for (let i = 0; i < 4; i++) {if (hasAnyMove(ts)) {anyFit = true; break;} ts = rotate(ts);}
-
-            if (!anyFit) {
-                let p2; do {p2 = SHAPES[Math.floor(Math.random() * SHAPES.length)];} while (p2.id === idx);
-                piece = {id: p2.id, shape: p2.s, color: p2.c};
-                let sf = false; ts = piece.shape;
-                for (let i = 0; i < 4; i++) {if (hasAnyMove(ts)) {sf = true; break;} ts = rotate(ts);}
-                if (!sf) {alert("GAME OVER"); location.reload(); return;}
-            }
-            currentPiece = piece;
+            currentPiece = {id: p.id, shape: p.s, color: p.c};
             renderAll();
         }
 
@@ -247,9 +219,9 @@
         function onMove(e) {
             if (!isDragging) return;
             const t = e.touches ? e.touches[0] : e;
-            // Shift the ghost slightly above the finger so it's visible while dragging
+            // The visual ghost is offset so it's above the finger
             dCanvas.style.left = (t.clientX - SIZE) + 'px';
-            dCanvas.style.top = (t.clientY - SIZE * 1.5) + 'px';
+            dCanvas.style.top = (t.clientY - SIZE * 2) + 'px';
             if (e.cancelable) e.preventDefault();
         }
 
@@ -261,15 +233,21 @@
             const t = e.changedTouches ? e.changedTouches[0] : e;
             const rect = gCanvas.getBoundingClientRect();
 
-            // Adjust coordinates for mobile scaling
-            const col = Math.floor((t.clientX - rect.left) / SIZE);
-            const row = Math.floor((t.clientY - rect.top) / SIZE);
+            // MATH FIX: Calculate grid position based on the GHOST position, not finger position
+            // We subtract the same offsets used in onMove
+            const ghostX = t.clientX - SIZE;
+            const ghostY = t.clientY - SIZE * 2;
 
-            if (row >= 0 && col >= 0) {
+            const col = Math.round((ghostX - rect.left) / SIZE);
+            const row = Math.round((ghostY - rect.top) / SIZE);
+
+            if (row >= 0 && col >= 0 && row < ROWS && col < COLS) {
                 let can = true;
                 currentPiece.shape.forEach((r, y) => {
                     r.forEach((cell, x) => {
-                        if (cell && (row + y >= ROWS || col + x >= COLS || grid[row + y][col + x])) can = false;
+                        if (cell) {
+                            if (row + y >= ROWS || col + x >= COLS || grid[row + y][col + x]) can = false;
+                        }
                     });
                 });
                 if (can) {
