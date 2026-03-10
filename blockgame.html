@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Gridlock'd</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: #1a1a1a;
+            color: #eee;
+            font-family: monospace;
+            overflow: hidden;
+            user-select: none;
+            touch-action: none;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        #ui {
+            padding: 10px 0;
+            text-align: center;
+            flex: 0 0 auto;
+        }
+
+        canvas {
+            background: #000;
+            border: 2px solid #444;
+            touch-action: none;
+            display: block;
+        }
+
+        #piece-area {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            flex: 1 1 auto;
+            width: 100%;
+        }
+
+        #piece-container {
+            padding: 5px;
+            border: 1px dashed #666;
+            background: #000;
+            margin-bottom: 10px;
+        }
+
+        .btn-row {
+            display: flex;
+            gap: 15px;
+            width: 100%;
+            justify-content: center;
+            padding-bottom: 20px;
+        }
+
+        button {
+            background: #333;
+            color: white;
+            border: 1px solid #555;
+            padding: 15px 25px;
+            cursor: pointer;
+            border-radius: 8px;
+            font-size: 20px;
+            font-family: monospace;
+            min-width: 60px;
+        }
+
+        button:disabled {
+            opacity: 0.2;
+        }
+
+        .discard-btn {
+            background: #522;
+            border-color: #833;
+        }
+
+        #drag-proxy {
+            position: fixed;
+            pointer-events: none;
+            display: none;
+            z-index: 9999;
+            background: transparent !important;
+            border: none !important;
+        }
+    </style>
+</head>
+
+<body oncontextmenu="return false;">
+
+    <div id="ui">
+        <h2>GRIDLOCK'D</h2>
+    </div>
+
+    <canvas id="gridCanvas"></canvas>
+
+    <div id="piece-area">
+        <div id="piece-container">
+            <canvas id="nextCanvas" width="100" height="100"></canvas>
+        </div>
+        <div class="btn-row">
+            <button id="rotL">↺</button>
+            <button id="discardBtn" class="discard-btn">🗑</button>
+            <button id="rotR">↻</button>
+        </div>
+    </div>
+
+    <canvas id="drag-proxy" width="160" height="160"></canvas>
+
+    <script>
+        const ROWS = 9, COLS = 9;
+        const gCanvas = document.getElementById('gridCanvas'), gCtx = gCanvas.getContext('2d');
+        const nCanvas = document.getElementById('nextCanvas'), nCtx = nCanvas.getContext('2d');
+        const dCanvas = document.getElementById('drag-proxy'), dCtx = dCanvas.getContext('2d');
+        const dBtn = document.getElementById('discardBtn');
+
+        // Responsive Calculation
+        let screenWidth = window.innerWidth;
+        let padding = 20;
+        let canvasWidth = screenWidth - padding;
+        if (canvasWidth > 400) canvasWidth = 400; // Cap for desktop
+
+        const SIZE = canvasWidth / COLS;
+        gCanvas.width = canvasWidth;
+        gCanvas.height = canvasWidth;
+
+        let grid = Array(ROWS).fill().map(() => Array(COLS).fill(0));
+        let currentPiece = null;
+        let isDragging = false;
+        let canDiscard = true;
+        let lastDiscardedIndex = null;
+
+        const SHAPES = [
+            {id: 0, s: [[1, 1, 1, 1]], c: '#FF0D72'},
+            {id: 1, s: [[1, 1], [1, 1]], c: '#0DC2FF'},
+            {id: 2, s: [[0, 1, 0], [1, 1, 1]], c: '#0DFF72'},
+            {id: 3, s: [[1, 1, 0], [0, 1, 1]], c: '#F538FF'},
+            {id: 4, s: [[0, 1, 1], [1, 1, 0]], c: '#FF8E0D'},
+            {id: 5, s: [[1, 0, 0], [1, 1, 1]], c: '#FFE138'},
+            {id: 6, s: [[0, 0, 1], [1, 1, 1]], c: '#3877FF'}
+        ];
+
+        function rotate(shape, cw = true) {
+            let n = shape[0].map((_, i) => shape.map(row => row[i]));
+            return cw ? n.map(r => r.reverse()) : n.reverse();
+        }
+
+        function handleRotate(cw) {
+            if (!currentPiece) return;
+            currentPiece.shape = rotate(currentPiece.shape, cw);
+            renderAll();
+            if (isDragging) updateDragVisual();
+        }
+
+        function discardPiece() {
+            if (!canDiscard) return;
+            lastDiscardedIndex = currentPiece.id;
+            canDiscard = false;
+            dBtn.disabled = true;
+            spawnPiece();
+        }
+
+        function drawShape(ctx, shape, color, ox = 0, oy = 0, scale = SIZE) {
+            ctx.fillStyle = color;
+            shape.forEach((row, y) => {
+                row.forEach((cell, x) => {
+                    if (cell) ctx.fillRect(x * scale + ox, y * scale + oy, scale - 2, scale - 2);
+                });
+            });
+        }
+
+        function renderAll() {
+            gCtx.clearRect(0, 0, gCanvas.width, gCanvas.height);
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    gCtx.strokeStyle = '#222';
+                    gCtx.strokeRect(c * SIZE, r * SIZE, SIZE, SIZE);
+                    if (grid[r][c]) {
+                        gCtx.fillStyle = grid[r][c];
+                        gCtx.fillRect(c * SIZE + 1, r * SIZE + 1, SIZE - 2, SIZE - 2);
+                    }
+                }
+            }
+            nCtx.clearRect(0, 0, nCanvas.width, nCanvas.height);
+            if (!isDragging && currentPiece) drawShape(nCtx, currentPiece.shape, currentPiece.color, 10, 10, 20);
+        }
+
+        function hasAnyMove(shape) {
+            for (let r = 0; r <= ROWS - shape.length; r++) {
+                for (let c = 0; c <= COLS - shape[0].length; c++) {
+                    let fit = true;
+                    for (let y = 0; y < shape.length; y++) {
+                        for (let x = 0; x < shape[y].length; x++) {
+                            if (shape[y][x] && (grid[r + y] === undefined || grid[r + y][c + x] !== 0)) fit = false;
+                        }
+                    }
+                    if (fit) return true;
+                }
+            }
+            return false;
+        }
+
+        function spawnPiece() {
+            let idx;
+            do {idx = Math.floor(Math.random() * SHAPES.length);} while (idx === lastDiscardedIndex);
+            const p = SHAPES[idx];
+            let piece = {id: p.id, shape: p.s, color: p.c};
+
+            let ts = piece.shape;
+            let anyFit = false;
+            for (let i = 0; i < 4; i++) {if (hasAnyMove(ts)) {anyFit = true; break;} ts = rotate(ts);}
+
+            if (!anyFit) {
+                let p2; do {p2 = SHAPES[Math.floor(Math.random() * SHAPES.length)];} while (p2.id === idx);
+                piece = {id: p2.id, shape: p2.s, color: p2.c};
+                let sf = false; ts = piece.shape;
+                for (let i = 0; i < 4; i++) {if (hasAnyMove(ts)) {sf = true; break;} ts = rotate(ts);}
+                if (!sf) {alert("GAME OVER"); location.reload(); return;}
+            }
+            currentPiece = piece;
+            renderAll();
+        }
+
+        function updateDragVisual() {
+            dCtx.clearRect(0, 0, dCanvas.width, dCanvas.height);
+            drawShape(dCtx, currentPiece.shape, currentPiece.color, 0, 0, SIZE);
+        }
+
+        function onStart(e) {
+            isDragging = true;
+            dCanvas.style.display = 'block';
+            updateDragVisual();
+            onMove(e);
+            renderAll();
+        }
+
+        function onMove(e) {
+            if (!isDragging) return;
+            const t = e.touches ? e.touches[0] : e;
+            // Shift the ghost slightly above the finger so it's visible while dragging
+            dCanvas.style.left = (t.clientX - SIZE) + 'px';
+            dCanvas.style.top = (t.clientY - SIZE * 1.5) + 'px';
+            if (e.cancelable) e.preventDefault();
+        }
+
+        function onEnd(e) {
+            if (!isDragging) return;
+            isDragging = false;
+            dCanvas.style.display = 'none';
+
+            const t = e.changedTouches ? e.changedTouches[0] : e;
+            const rect = gCanvas.getBoundingClientRect();
+
+            // Adjust coordinates for mobile scaling
+            const col = Math.floor((t.clientX - rect.left) / SIZE);
+            const row = Math.floor((t.clientY - rect.top) / SIZE);
+
+            if (row >= 0 && col >= 0) {
+                let can = true;
+                currentPiece.shape.forEach((r, y) => {
+                    r.forEach((cell, x) => {
+                        if (cell && (row + y >= ROWS || col + x >= COLS || grid[row + y][col + x])) can = false;
+                    });
+                });
+                if (can) {
+                    currentPiece.shape.forEach((r, y) => {
+                        r.forEach((c, x) => {if (c) grid[row + y][col + x] = currentPiece.color;});
+                    });
+                    canDiscard = true; dBtn.disabled = false; lastDiscardedIndex = null;
+                    if (grid.flat().every(c => c !== 0)) {alert("WIN!"); location.reload();}
+                    else spawnPiece();
+                }
+            }
+            renderAll();
+        }
+
+        nCanvas.addEventListener('mousedown', onStart);
+        nCanvas.addEventListener('touchstart', onStart, {passive: false});
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('touchmove', onMove, {passive: false});
+        window.addEventListener('mouseup', onEnd);
+        window.addEventListener('touchend', onEnd);
+
+        document.getElementById('rotL').onclick = () => handleRotate(false);
+        document.getElementById('rotR').onclick = () => handleRotate(true);
+        dBtn.onclick = discardPiece;
+
+        spawnPiece();
+    </script>
+</body>
+
+</html>
