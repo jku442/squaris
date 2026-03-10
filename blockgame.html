@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>9x9 Grid Filler - Smart Discard</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: #1a1a1a;
+            color: #eee;
+            font-family: monospace;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        #ui {
+            margin: 10px;
+            text-align: center;
+        }
+
+        canvas {
+            background: #000;
+            border: 2px solid #444;
+            touch-action: none;
+        }
+
+        #piece-area {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-top: 15px;
+        }
+
+        #piece-container {
+            padding: 10px;
+            border: 1px dashed #666;
+            cursor: grab;
+            background: #000;
+        }
+
+        .btn-row {
+            margin-top: 10px;
+            display: flex;
+            gap: 10px;
+        }
+
+        button {
+            background: #333;
+            color: white;
+            border: 1px solid #555;
+            padding: 10px 15px;
+            cursor: pointer;
+            border-radius: 5px;
+            font-family: monospace;
+            transition: all 0.2s;
+        }
+
+        button:hover:not(:disabled) {
+            background: #444;
+        }
+
+        button:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        .discard-btn {
+            background: #522;
+            border-color: #833;
+        }
+
+        .discard-btn:hover:not(:disabled) {
+            background: #833;
+        }
+
+        #drag-proxy {
+            position: fixed;
+            pointer-events: none;
+            display: none;
+            z-index: 9999;
+            background: transparent !important;
+            border: none !important;
+        }
+    </style>
+</head>
+
+<body oncontextmenu="return false;">
+
+    <div id="ui">
+        <h2>9x9 GRID FILLER</h2>
+        <div id="msg">Drag block to grid</div>
+    </div>
+
+    <canvas id="gridCanvas" width="360" height="360"></canvas>
+
+    <div id="piece-area">
+        <div id="piece-container">
+            <canvas id="nextCanvas" width="160" height="160"></canvas>
+        </div>
+        <div class="btn-row">
+            <button onclick="handleRotate(false)">↺ CCW</button>
+            <button id="discardBtn" class="discard-btn" onclick="discardPiece()">🗑 DISCARD</button>
+            <button onclick="handleRotate(true)">CW ↻</button>
+        </div>
+    </div>
+
+    <canvas id="drag-proxy" width="160" height="160"></canvas>
+
+    <script>
+        const SIZE = 40, ROWS = 9, COLS = 9;
+        const gCanvas = document.getElementById('gridCanvas'), gCtx = gCanvas.getContext('2d');
+        const nCanvas = document.getElementById('nextCanvas'), nCtx = nCanvas.getContext('2d');
+        const dCanvas = document.getElementById('drag-proxy'), dCtx = dCanvas.getContext('2d');
+        const discardBtn = document.getElementById('discardBtn');
+
+        let grid = Array(ROWS).fill().map(() => Array(COLS).fill(0));
+        let currentPiece = null;
+        let isDragging = false;
+        let canDiscard = true;
+        let lastDiscardedIndex = null; // Tracks the ID of the discarded block
+
+        const SHAPES = [
+            {id: 0, s: [[1, 1, 1, 1]], c: '#FF0D72'}, // I
+            {id: 1, s: [[1, 1], [1, 1]], c: '#0DC2FF'}, // O
+            {id: 2, s: [[0, 1, 0], [1, 1, 1]], c: '#0DFF72'}, // T
+            {id: 3, s: [[1, 1, 0], [0, 1, 1]], c: '#F538FF'}, // S
+            {id: 4, s: [[0, 1, 1], [1, 1, 0]], c: '#FF8E0D'}, // Z
+            {id: 5, s: [[1, 0, 0], [1, 1, 1]], c: '#FFE138'}, // L
+            {id: 6, s: [[0, 0, 1], [1, 1, 1]], c: '#3877FF'}  // J
+        ];
+
+        function rotate(shape, clockwise = true) {
+            let newShape = shape[0].map((_, i) => shape.map(row => row[i]));
+            return clockwise ? newShape.map(row => row.reverse()) : newShape.reverse();
+        }
+
+        function handleRotate(cw) {
+            if (!currentPiece) return;
+            currentPiece.shape = rotate(currentPiece.shape, cw);
+            renderAll();
+            if (isDragging) updateDragVisual();
+        }
+
+        function discardPiece() {
+            if (!canDiscard) return;
+            lastDiscardedIndex = currentPiece.id; // Mark current ID as banned for next spawn
+            canDiscard = false;
+            discardBtn.disabled = true;
+            spawnPiece();
+        }
+
+        function drawShape(ctx, shape, color, offsetX = 0, offsetY = 0) {
+            ctx.fillStyle = color;
+            shape.forEach((row, y) => {
+                row.forEach((cell, x) => {
+                    if (cell) ctx.fillRect(x * SIZE + offsetX, y * SIZE + offsetY, SIZE - 2, SIZE - 2);
+                });
+            });
+        }
+
+        function renderAll() {
+            gCtx.clearRect(0, 0, gCanvas.width, gCanvas.height);
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    gCtx.strokeStyle = '#222';
+                    gCtx.strokeRect(c * SIZE, r * SIZE, SIZE, SIZE);
+                    if (grid[r][c]) {
+                        gCtx.fillStyle = grid[r][c];
+                        gCtx.fillRect(c * SIZE + 1, r * SIZE + 1, SIZE - 2, SIZE - 2);
+                    }
+                }
+            }
+            nCtx.clearRect(0, 0, nCanvas.width, nCanvas.height);
+            if (!isDragging && currentPiece) drawShape(nCtx, currentPiece.shape, currentPiece.color, 20, 20);
+        }
+
+        function hasAnyMove(shape) {
+            for (let r = 0; r <= ROWS - shape.length; r++) {
+                for (let c = 0; c <= COLS - shape[0].length; c++) {
+                    let fit = true;
+                    for (let y = 0; y < shape.length; y++) {
+                        for (let x = 0; x < shape[y].length; x++) {
+                            if (shape[y][x] && (grid[r + y] === undefined || grid[r + y][c + x] !== 0)) fit = false;
+                        }
+                    }
+                    if (fit) return true;
+                }
+            }
+            return false;
+        }
+
+        function spawnPiece() {
+            let idx;
+            // Loop until we find a block that wasn't just discarded
+            do {
+                idx = Math.floor(Math.random() * SHAPES.length);
+            } while (idx === lastDiscardedIndex);
+
+            const p = SHAPES[idx];
+            let piece = {id: p.id, shape: p.s, color: p.c};
+
+            // Check fit (all 4 rotations)
+            let anyFit = false;
+            let testShape = piece.shape;
+            for (let i = 0; i < 4; i++) {
+                if (hasAnyMove(testShape)) {anyFit = true; break;}
+                testShape = rotate(testShape);
+            }
+
+            if (!anyFit) {
+                // Secondary check for "Extra Block" logic
+                let p2;
+                do {
+                    p2 = SHAPES[Math.floor(Math.random() * SHAPES.length)];
+                } while (p2.id === idx); // Ensure extra block isn't the one we just failed with
+
+                piece = {id: p2.id, shape: p2.s, color: p2.c};
+                let secondFit = false;
+                testShape = piece.shape;
+                for (let i = 0; i < 4; i++) {
+                    if (hasAnyMove(testShape)) {secondFit = true; break;}
+                    testShape = rotate(testShape);
+                }
+                if (!secondFit) {alert("Game Over!"); location.reload(); return;}
+            }
+            currentPiece = piece;
+            renderAll();
+        }
+
+        function updateDragVisual() {
+            dCtx.clearRect(0, 0, dCanvas.width, dCanvas.height);
+            drawShape(dCtx, currentPiece.shape, currentPiece.color, 0, 0);
+        }
+
+        function updateProxyPos(e) {
+            dCanvas.style.left = (e.clientX - 10) + 'px';
+            dCanvas.style.top = (e.clientY - 10) + 'px';
+        }
+
+        nCanvas.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            dCanvas.style.display = 'block';
+            updateDragVisual();
+            updateProxyPos(e);
+            renderAll();
+        });
+
+        window.addEventListener('mousemove', (e) => {if (isDragging) updateProxyPos(e);});
+
+        window.addEventListener('mouseup', (e) => {
+            if (!isDragging) return;
+            isDragging = false;
+            dCanvas.style.display = 'none';
+
+            const rect = gCanvas.getBoundingClientRect();
+            const col = Math.floor((e.clientX - rect.left) / SIZE);
+            const row = Math.floor((e.clientY - rect.top) / SIZE);
+
+            if (row >= 0 && col >= 0) {
+                let canPlace = true;
+                currentPiece.shape.forEach((r, y) => {
+                    r.forEach((cell, x) => {
+                        if (cell) {
+                            if (row + y >= ROWS || col + x >= COLS || grid[row + y][col + x]) canPlace = false;
+                        }
+                    });
+                });
+
+                if (canPlace) {
+                    currentPiece.shape.forEach((r, y) => {
+                        r.forEach((cell, x) => {
+                            if (cell) grid[row + y][col + x] = currentPiece.color;
+                        });
+                    });
+
+                    canDiscard = true;
+                    discardBtn.disabled = false;
+                    lastDiscardedIndex = null; // Reset ban after placement
+
+                    if (grid.flat().every(c => c !== 0)) {
+                        alert("WIN!");
+                        location.reload();
+                    } else {
+                        spawnPiece();
+                    }
+                }
+            }
+            renderAll();
+        });
+
+        spawnPiece();
+    </script>
+</body>
+
+</html>
